@@ -1,54 +1,182 @@
-name: Build Android APK
+name: Build Mexc Pro Scalper Advanced- Onn GN3 ARMv7
 
 on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/android-apk.yml'
+      - 'buildozer.spec'
+      - 'requirements.txt'
+      - 'main.py'
+      - 'service.py'
+      - 'app/**'
+      - 'android/**'
+      - 'generated/**'
+      - 'proto/**'
 
 jobs:
-  build-apk:
+  build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install system dependencies for Buildozer
+      - name: Verify Android source layout
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake \
-            libffi-dev libssl-dev automake libltdl-dev
+          set -u
+          : > syntax-diagnostics.txt
+          failed=0
+          for f in main.py app/mobile_main.py app/mobile_safety_patch.py service.py app/trading/live_engine.py; do
+            echo "=== PY_COMPILE $f ===" | tee -a syntax-diagnostics.txt
+            if ! python -m py_compile "$f" >> syntax-diagnostics.txt 2>&1; then
+              failed=1
+            fi
+          done
+          test -f main.py
+          test -f app/mobile_main.py
+          test -f app/mobile_safety_patch.py
+          test -f app/trading/live_engine.py
+          test -f service.py
+          test -f buildozer.spec
+          ! grep -q "android\.mobile_main" main.py
+          grep -q "app\.mobile_main" main.py
+          grep -q "mobile_safety_patch" main.py
+          cat syntax-diagnostics.txt
+          test "$failed" -eq 0
 
-      - name: Cache Buildozer directory
-        uses: actions/cache@v4
-        with:
-          path: |
-            .buildozer
-            ~/.buildozer
-          key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
-          restore-keys: |
-            buildozer-${{ runner.os }}-
-
-      - name: Install Buildozer and Cython
-        run: |
-          pip3 install --upgrade pip
-          pip3 install "cython<3.0.0" buildozer
-
-      - name: Build Debug APK with Buildozer
-        run: |
-          buildozer android debug
-
-      - name: Upload Compiled APK Artifact
+      - name: Upload syntax diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: MEXC-Pro-Scalper-APK
-          path: bin/*.apk
+          name: syntax-diagnostics
+          path: syntax-diagnostics.txt
+          if-no-files-found: warn
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Android build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git zip unzip openjdk-17-jdk autoconf automake autopoint libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo6 cmake libffi-dev libssl-dev gettext
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "buildozer==1.6.0" "cython==0.29.37" pytest pydantic "pydantic-settings>=2.0" python-dotenv "httpx>=0.27" "websockets>=15.0" "protobuf>=7.36.2,<8"
+
+      - name: Pin stable python-for-android and Python recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          spec = Path("buildozer.spec")
+          text = spec.read_text(encoding="utf-8")
+
+          def set_option(text, key, value):
+              pattern = rf"(?m)^\s*#?\s*{re.escape(key)}\s*=.*$"
+              replacement = f"{key} = {value}"
+              if re.search(pattern, text):
+                  return re.sub(pattern, replacement, text, count=1)
+              marker = "[app]"
+              pos = text.find(marker)
+              if pos < 0:
+                  raise SystemExit("buildozer.spec has no [app] section")
+              insert = text.find("\n", pos)
+              return text[:insert+1] + replacement + "\n" + text[insert+1:]
+
+          text = set_option(text, "p4a.branch", "v2024.01.21")
+          spec.write_text(text, encoding="utf-8")
+
+          req = Path("requirements.txt")
+          if req.exists():
+              lines = req.read_text(encoding="utf-8").splitlines()
+              out = []
+              replaced = False
+              for line in lines:
+                  if re.match(r"^\s*python3(?:==|[<>=!~])", line):
+                      if not replaced:
+                          out.append("python3==3.11.5")
+                          replaced = True
+                      continue
+                  if line.strip() == "python3":
+                      if not replaced:
+                          out.append("python3==3.11.5")
+                          replaced = True
+                      continue
+                  out.append(line)
+              if not replaced:
+                  out.insert(0, "python3==3.11.5")
+              out = [line for line in out if not re.match(r"^\s*hostpython3(?:==|[<>=!~])", line)]
+              out.append("hostpython3==3.11.5")
+              req.write_text("\n".join(out) + "\n", encoding="utf-8")
+          PY
+
+      - name: Run Python regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q app/trading/test_live_position_reconciliation.py app/trading/test_live_gate.py app/trading/test_live_safety.py app/trading/test_live_default_lock.py app/market/test_feature_engine_zero_division.py app/market/test_scoring.py
+
+      - name: Clean Buildozer state
+        run: |
+          rm -rf .buildozer bin
+          mkdir -p bin
+
+      - name: Build debug APK - ARMv7
+        shell: bash
+        run: |
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee buildozer-build.log
+
+      - name: Verify generated application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .buildozer/android/app/main.py
+          ! grep -q "android\.mobile_main" .buildozer/android/app/main.py
+          grep -q "app\.mobile_main" .buildozer/android/app/main.py
+          grep -q "mobile_safety_patch" .buildozer/android/app/main.py
+          python -m py_compile .buildozer/android/app/main.py
+
+      - name: Locate and verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find . -type f -iname '*.apk' \
+            -not -path './.git/*' \
+            -not -path './.buildozer/android/platform/python-for-android/*' \
+            | head -n 1 || true)"
+          test -n "$APK"
+          cp "$APK" bin/mexcpro-scalper-advanced-onn-gn3-armeabi-v7a-debug.apk
+          test -s bin/mexcpro-scalper-advancedr-onn-gn3-armeabi-v7a-debug.apk
+          file bin/mexcpro-scalper-advanced-onn-gn3-armeabi-v7a-debug.apk
+          ls -lh bin/mexcpro-scalper-advanced-onn-gn3-armeabi-v7a-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mexcpro-scalper-advanced-onn-gn3-armeabi-v7a
+          path: bin/mexcpro-scalper-advanced-onn-gn3-armeabi-v7a-debug.apk
+          if-no-files-found: error
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-diagnostics
+          path: |
+            buildozer-build.log
+            .buildozer/**/*.log
+            .buildozer/**/build.log
+          if-no-files-found: warn
