@@ -1,4 +1,4 @@
-name: Build Mexc Pro Scalper Advanced- Onn GN3 ARMv7
+name: Build Mexc Pro Scalper Advanced - Onn GN3 ARMv7
 
 on:
   workflow_dispatch:
