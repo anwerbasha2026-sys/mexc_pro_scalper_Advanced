@@ -19,7 +19,7 @@ from kivy.clock import Clock
 from kivy.metrics import dp, sp
 from kivy.core.window import Window
 from kivy.core.text import LabelBase
-from kivy.graphics import Color, RoundedRectangle, Rectangle, Line
+from kivy.graphics import Color, RoundedRectangle, Line
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.scrollview import ScrollView
@@ -29,43 +29,184 @@ from kivy.uix.textinput import TextInput
 from kivy.uix.checkbox import CheckBox
 from kivy.uix.spinner import Spinner
 from kivy.uix.popup import Popup
-from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem
-from kivy.uix.widget import Widget
 
-# --- دعم تشكيل النصوص العربية في Kivy (مع بديل تلقائي مدمج) ---
-try:
-    import arabic_reshaper
-    from bidi.algorithm import get_display
+# ==============================================================================
+# محرك تشكيل النصوص العربية واتجاه القراءة (Pure-Python Built-in Arabic Reshaper + BiDi)
+# يعمل ذاتياً بنسبة 100% على أندرويد وكمبيوتر دون الاعتماد على مكتبات خارجية قد تفشل
+# ==============================================================================
+ARABIC_CHAR_FORMS = {
+    "\u0621": ("\uFE80", "\uFE80", "\uFE80", "\uFE80"),  # ء
+    "\u0622": ("\uFE81", "\uFE82", "\uFE81", "\uFE82"),  # آ
+    "\u0623": ("\uFE83", "\uFE84", "\uFE83", "\uFE84"),  # أ
+    "\u0624": ("\uFE85", "\uFE86", "\uFE85", "\uFE86"),  # ؤ
+    "\u0625": ("\uFE87", "\uFE88", "\uFE87", "\uFE88"),  # إ
+    "\u0626": ("\uFE89", "\uFE8A", "\uFE8B", "\uFE8C"),  # ئ
+    "\u0627": ("\uFE8D", "\uFE8E", "\uFE8D", "\uFE8E"),  # ا
+    "\u0628": ("\uFE8F", "\uFE90", "\uFE91", "\uFE92"),  # ب
+    "\u0629": ("\uFE93", "\uFE94", "\uFE93", "\uFE94"),  # ة
+    "\u062A": ("\uFE95", "\uFE96", "\uFE97", "\uFE98"),  # ت
+    "\u062B": ("\uFE99", "\uFE9A", "\uFE9B", "\uFE9C"),  # ث
+    "\u062C": ("\uFE9D", "\uFE9E", "\uFE9F", "\uFEA0"),  # ج
+    "\u062D": ("\uFEA1", "\uFEA2", "\uFEA3", "\uFEA4"),  # ح
+    "\u062E": ("\uFEA5", "\uFEA6", "\uFEA7", "\uFEA8"),  # خ
+    "\u062F": ("\uFEA9", "\uFEAA", "\uFEA9", "\uFEAA"),  # د
+    "\u0630": ("\uFEAB", "\uFEAC", "\uFEAB", "\uFEAC"),  # ذ
+    "\u0631": ("\uFEAD", "\uFEAE", "\uFEAD", "\uFEAE"),  # ر
+    "\u0632": ("\uFEAF", "\uFEB0", "\uFEAF", "\uFEB0"),  # ز
+    "\u0633": ("\uFEB1", "\uFEB2", "\uFEB3", "\uFEB4"),  # س
+    "\u0634": ("\uFEB5", "\uFEB6", "\uFEB7", "\uFEB8"),  # ش
+    "\u0635": ("\uFEB9", "\uFEBA", "\uFEBB", "\uFEBC"),  # ص
+    "\u0636": ("\uFEBD", "\uFEBE", "\uFEBF", "\uFEC0"),  # ض
+    "\u0637": ("\uFEC1", "\uFEC2", "\uFEC3", "\uFEC4"),  # ط
+    "\u0638": ("\uFEC5", "\uFEC6", "\uFEC7", "\uFEC8"),  # ظ
+    "\u0639": ("\uFEC9", "\uFECA", "\uFECB", "\uFECC"),  # ع
+    "\u063A": ("\uFECD", "\uFECE", "\uFECF", "\uFED0"),  # غ
+    "\u0640": ("\u0640", "\u0640", "\u0640", "\u0640"),  # ـ
+    "\u0641": ("\uFED1", "\uFED2", "\uFED3", "\uFED4"),  # ف
+    "\u0642": ("\uFED5", "\uFED6", "\uFED7", "\uFED8"),  # ق
+    "\u0643": ("\uFED9", "\uFEDA", "\uFEDB", "\uFEDC"),  # ك
+    "\u0644": ("\uFEDD", "\uFEDE", "\uFEDF", "\uFEE0"),  # ل
+    "\u0645": ("\uFEE1", "\uFEE2", "\uFEE3", "\uFEE4"),  # م
+    "\u0646": ("\uFEE5", "\uFEE6", "\uFEE7", "\uFEE8"),  # ن
+    "\u0647": ("\uFEE9", "\uFEEA", "\uFEEB", "\uFEEC"),  # ه
+    "\u0648": ("\uFEED", "\uFEEE", "\uFEED", "\uFEEE"),  # و
+    "\u0649": ("\uFEEF", "\uFEF0", "\uFEEF", "\uFEF0"),  # ى
+    "\u064A": ("\uFEF1", "\uFEF2", "\uFEF3", "\uFEF4"),  # ي
+}
 
-    def ar_text(text):
-        if text is None:
-            return ""
-        s = str(text)
-        if not re.search(r"[\u0600-\u06FF]", s):
-            return s
-        try:
-            return get_display(arabic_reshaper.reshape(s))
-        except Exception:
-            return s
-except ImportError:
-    def ar_text(text):
-        return "" if text is None else str(text)
+NON_CONNECTING_NEXT = {
+    "\u0621", "\u0622", "\u0623", "\u0624", "\u0625", "\u0627",
+    "\u0629", "\u062F", "\u0630", "\u0631", "\u0632", "\u0648", "\u0649"
+}
+
+LAM_ALEF_LIGATURES = {
+    "\u0622": ("\uFEF5", "\uFEF6"),  # لآ
+    "\u0623": ("\uFEF7", "\uFEF8"),  # لأ
+    "\u0625": ("\uFEF9", "\uFEFA"),  # لإ
+    "\u0627": ("\uFEFB", "\uFEFC"),  # لا
+}
+
+HARAKAT_SET = set("\u064B\u064C\u064D\u064E\u064F\u0650\u0651\u0652\u0670\uFE0F")
+
+# استبدال رموز الإيموجي غير المدعومة في خط النظام برموز قياسية مدعومة في الخط المدمج
+EMOJI_FALLBACK_MAP = {
+    "🔍": "◆ ",
+    "✅": "✔ ",
+    "⚠️": "⚠ ",
+    "🎯": "★ ",
+    "🚀": "▲ ",
+    "🔒": "● ",
+    "ℹ️": "ℹ ",
+    "🔑": "◆ ",
+    "⚙️": "⚙ ",
+    "⏹": "■",
+    "🧹": "◆ ",
+    "🗑️": "✖ ",
+    "📈": "▲ ",
+    "📊": "■ ",
+    "📜": "◆ ",
+    "📝": "● ",
+    "🛑": "✖ ",
+    "💰": "★ ",
+    "🔄": "◀ ",
+}
+
+MIRROR_BRACKETS = str.maketrans("()[]{}<>", ")(][}{><")
+
+LTR_RUN_RE = re.compile(
+    r"(?:[+$%-]*\d+(?:[.,]\d+)*(?:%|x)?|[A-Za-z][A-Za-z0-9_./:-]*(?:\s+[A-Za-z0-9_./:-]+)*)"
+)
+
+
+def _builtin_reshape_arabic(text):
+    """وصل الحروف العربية وتحويلها إلى Presentation Forms-B مع دعم اللام-ألف."""
+    chars = [c for c in text if c not in HARAKAT_SET]
+    n = len(chars)
+    out = []
+    i = 0
+    while i < n:
+        ch = chars[i]
+        if ch not in ARABIC_CHAR_FORMS:
+            out.append(ch)
+            i += 1
+            continue
+
+        prev_ch = chars[i - 1] if i > 0 else None
+        prev_connects = (prev_ch in ARABIC_CHAR_FORMS) and (prev_ch not in NON_CONNECTING_NEXT)
+
+        if ch == "\u0644" and (i + 1 < n) and (chars[i + 1] in LAM_ALEF_LIGATURES):
+            lig_iso, lig_fin = LAM_ALEF_LIGATURES[chars[i + 1]]
+            out.append(lig_fin if prev_connects else lig_iso)
+            i += 2
+            continue
+
+        next_ch = chars[i + 1] if (i + 1 < n) else None
+        next_connects = (next_ch in ARABIC_CHAR_FORMS) and (ch not in NON_CONNECTING_NEXT)
+
+        iso, fin, ini, med = ARABIC_CHAR_FORMS[ch]
+        if prev_connects and next_connects:
+            out.append(med)
+        elif prev_connects and not next_connects:
+            out.append(fin)
+        elif not prev_connects and next_connects:
+            out.append(ini)
+        else:
+            out.append(iso)
+        i += 1
+    return "".join(out)
+
+
+def _builtin_bidi_line(line):
+    """عكس اتجاه الجملة العربية من اليمين إلى اليسار مع الحفاظ على الكلمات الإنجليزية والأرقام."""
+    if not re.search(r"[\u0600-\u06FF\uFE70-\uFEFF]", line):
+        return line
+    reshaped = _builtin_reshape_arabic(line)
+    tokens = []
+    last = 0
+    for m in LTR_RUN_RE.finditer(reshaped):
+        if m.start() > last:
+            rtl_chunk = reshaped[last:m.start()].translate(MIRROR_BRACKETS)[::-1]
+            tokens.append(rtl_chunk)
+        tokens.append(m.group(0))
+        last = m.end()
+    if last < len(reshaped):
+        rtl_chunk = reshaped[last:].translate(MIRROR_BRACKETS)[::-1]
+        tokens.append(rtl_chunk)
+    return "".join(reversed(tokens))
+
+
+def ar_text(text):
+    """معالجة النص العربي (وصل الحروف + ضبط الاتجاه RTL) ومنع تكرار التحويل."""
+    if text is None:
+        return ""
+    s = str(text)
+    for emo, rep in EMOJI_FALLBACK_MAP.items():
+        if emo in s:
+            s = s.replace(emo, rep)
+    # إذا كان النص قد تم تشكيله مسبقاً (يحتوي على Presentation Forms-B) لا نعيد عكسه
+    if re.search(r"[\uFE70-\uFEFF]", s):
+        return s
+    if not re.search(r"[\u0600-\u06FF]", s):
+        return s
+    return "\n".join(_builtin_bidi_line(line) for line in s.split("\n"))
 
 
 def register_arabic_font():
-    """تسجيل خط يدعم العربية والرموز على أنظمة Android / Linux / Windows."""
+    """
+    تسجيل خط يدعم الحروف العربية المتصلة (Presentation Forms-B) على Android / Linux / Windows.
+    ملاحظة: خط NotoSansArabic الحديث على أندرويد لا يحتوي على محارف U+FE70..U+FEFF،
+    لذلك نعطي الأولوية لخط NotoSansArabic-Regular.ttf المرفق مع المشروع (المبني على DejaVuSans الكامل).
+    """
+    app_dir = os.path.dirname(os.path.abspath(__file__))
     candidate_paths = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "NotoSansArabic-Regular.ttf"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "DejaVuSans.ttf"),
-        "/system/fonts/NotoNaskhArabic-Regular.ttf",
-        "/system/fonts/NotoSansArabic-Regular.ttf",
-        "/system/fonts/DroidSansArabic.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoKufiArabic-Regular.ttf",
+        os.path.join(app_dir, "NotoSansArabic-Regular.ttf"),
+        os.path.join(app_dir, "DejaVuSans.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "C:\\Windows\\Fonts\\tahoma.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
         "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/system/fonts/DroidSansArabic.ttf",
+        "/system/fonts/Tahoma.ttf",
     ]
     for path in candidate_paths:
         if os.path.exists(path):
@@ -1419,9 +1560,9 @@ class RealLiveTickerThread(threading.Thread):
 
     def get_protection_status_label(self):
         if self.trailing_active:
-            return f"🚀 ملاحقة ربح ({self.dynamic_sl_percent:+.2f}%)"
+            return f"▲ ملاحقة ربح ({self.dynamic_sl_percent:+.2f}%)"
         if self.be_active:
-            return f"🔒 مؤمّنة BE ({self.dynamic_sl_percent:+.2f}%)"
+            return f"● مؤمّنة BE ({self.dynamic_sl_percent:+.2f}%)"
         return f"✔ وقف ثابت ({self.dynamic_sl_percent:+.2f}%)"
 
     def run(self):
@@ -1672,7 +1813,7 @@ class MEXCScalpKivyUI(BoxLayout):
             self._hdr_bg = RoundedRectangle(pos=header.pos, size=header.size, radius=[dp(5)])
         header.bind(pos=lambda i, v: setattr(self._hdr_bg, "pos", v), size=lambda i, v: setattr(self._hdr_bg, "size", v))
         title_lbl = make_label(
-            "⚡ MEXC Pro Scalper — Smart TP & Trailing SL Engine (Kivy Edition)",
+            "⚡ MEXC Pro Scalper — Smart TP & Trailing SL Engine",
             color=(0.0, 0.85, 0.95, 1), font_size=13, bold=True, halign="center", height=dp(30)
         )
         header.add_widget(title_lbl)
@@ -1893,7 +2034,7 @@ class MEXCScalpKivyUI(BoxLayout):
         card = CardBox("🚀 التحكم السريع", size_hint_y=None, height=dp(210))
 
         row1 = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(38))
-        self.btn_stop_scan = make_button("⏹ إيقاف البحث", (0.96, 0.49, 0.0, 1), callback=self.stop_scanning)
+        self.btn_stop_scan = make_button("■ إيقاف البحث", (0.96, 0.49, 0.0, 1), callback=self.stop_scanning)
         self.btn_stop_scan.disabled = True
         self.btn_start = make_button("▶ بدء البحث التلقائي", (0.08, 0.40, 0.75, 1), callback=lambda: self.start_scanning(reset_offset=True))
         row1.add_widget(self.btn_stop_scan)
@@ -1903,14 +2044,14 @@ class MEXCScalpKivyUI(BoxLayout):
         row2 = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(38))
         self.btn_close = make_button("✖ إغلاق الصفقة (Market)", (0.83, 0.18, 0.18, 1), callback=self.close_position_manual)
         self.btn_close.disabled = True
-        self.btn_lock_profit = make_button("🔒 تأمين على الدخول (BE)", (0.0, 0.54, 0.48, 1), callback=self.manual_lock_breakeven)
+        self.btn_lock_profit = make_button("● تأمين على الدخول (BE)", (0.0, 0.54, 0.48, 1), callback=self.manual_lock_breakeven)
         self.btn_lock_profit.disabled = True
         row2.add_widget(self.btn_close)
         row2.add_widget(self.btn_lock_profit)
         card.add_widget(row2)
 
         self.btn_force_close = make_button(
-            "⚠️ إغلاق إجباري (مسح الصفقة العالقة)",
+            "⚠ إغلاق إجباري (مسح الصفقة العالقة)",
             (0.42, 0.11, 0.60, 1),
             callback=self.force_close_position_local,
         )
@@ -1919,14 +2060,14 @@ class MEXCScalpKivyUI(BoxLayout):
 
         row4 = GridLayout(cols=2, spacing=dp(6), size_hint_y=None, height=dp(36))
         self.btn_clear_records = make_button(
-            "🗑️ مسح كافة السجلات",
+            "✖ مسح كافة السجلات",
             (0.27, 0.35, 0.39, 1),
             text_rgba=(1.0, 0.80, 0.74, 1),
             callback=self.handle_clear_all_records,
             height=dp(34),
         )
         self.btn_clear_blacklist = make_button(
-            "🧹 مسح الأزواج المستبعدة",
+            "◆ مسح الأزواج المستبعدة",
             (0.22, 0.28, 0.31, 1),
             callback=self.handle_clear_blacklist,
             height=dp(34),
@@ -1987,17 +2128,22 @@ class MEXCScalpKivyUI(BoxLayout):
 
     def _create_log_box(self):
         card = CardBox("📝 السجل المباشر", size_hint_y=0.48)
-        self.log_input = TextInput(
+        self.log_scroll = ScrollView(do_scroll_x=False, bar_width=dp(6))
+        self.log_label = Label(
             text="",
-            readonly=True,
-            multiline=True,
-            background_normal="",
-            background_color=(0.08, 0.08, 0.08, 1),
-            foreground_color=(0.88, 0.92, 0.95, 1),
+            color=(0.88, 0.92, 0.95, 1),
             font_size=sp(11.5),
-            padding=[dp(6), dp(6), dp(6), dp(6)],
+            halign="right",
+            valign="top",
+            size_hint_y=None,
+            padding=[dp(6), dp(6)],
         )
-        card.add_widget(self.log_input)
+        self.log_label.bind(
+            width=lambda inst, val: setattr(inst, "text_size", (val - dp(12), None)),
+            texture_size=lambda inst, val: setattr(inst, "height", max(val[1] + dp(10), self.log_scroll.height)),
+        )
+        self.log_scroll.add_widget(self.log_label)
+        card.add_widget(self.log_scroll)
         return card
 
     # --- نوافذ التنبيه والتأكيد (بديل QMessageBox في Kivy) ---
@@ -2035,10 +2181,10 @@ class MEXCScalpKivyUI(BoxLayout):
 
     def append_log(self, text):
         self.log_lines.append(ar_text(str(text)))
-        if len(self.log_lines) > 350:
-            self.log_lines = self.log_lines[-350:]
-        self.log_input.text = "\n".join(self.log_lines)
-        self.log_input.cursor = (0, len(self.log_lines))
+        if len(self.log_lines) > 250:
+            self.log_lines = self.log_lines[-250:]
+        self.log_label.text = "\n".join(self.log_lines)
+        Clock.schedule_once(lambda dt: setattr(self.log_scroll, "scroll_y", 0.0), 0.05)
 
     # --- إدارة الإعدادات والسجلات ---
     def load_saved_settings(self):
@@ -2128,8 +2274,6 @@ class MEXCScalpKivyUI(BoxLayout):
         }
 
     def _set_pos_row_values(self, symbol="--", amount="--", entry="--", current="--", highest="--", sl_txt="--", pnl_usd="--", pnl_pct="--", pnl_rgba=(0.9, 0.9, 0.9, 1), sl_rgba=(1.0, 0.6, 0.0, 1)):
-        # ترتيب الأعمدة من اليسار لليمين (للعرض العربي من اليمين لليسار):
-        # [0: النسبة, 1: الربح$, 2: الوقف, 3: أعلى قمة, 4: الحالي, 5: الدخول, 6: المبلغ المتبقي, 7: الزوج]
         values = [pnl_pct, pnl_usd, sl_txt, highest, current, entry, amount, symbol]
         colors = [pnl_rgba, pnl_rgba, sl_rgba, (0.9, 0.9, 0.9, 1), (0.9, 0.9, 0.9, 1), (0.9, 0.9, 0.9, 1), (0.9, 0.9, 0.9, 1), (1, 1, 1, 1)]
         for idx, (val, col) in enumerate(zip(values, colors)):
@@ -2166,7 +2310,7 @@ class MEXCScalpKivyUI(BoxLayout):
             clear_closed_trades_db()
             self.history_grid.clear_widgets()
             self.log_lines.clear()
-            self.log_input.text = ""
+            self.log_label.text = ""
             self.append_log("[🗑️ تنظيف شامل] تم مسح كافة سجلات الصفقات المنتهية والسجل المباشر بنجاح.")
 
         self.show_confirm(
